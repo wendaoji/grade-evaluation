@@ -23,19 +23,28 @@ gradeEvaluation/
 │   ├── api.md
 │   ├── architecture.md
 │   ├── database-design.md
+│   ├── operations.md
 │   ├── overview.md
 │   ├── requirements.md
 │   └── roadmap.md
+├── scripts/
+│   └── backup-db.sh
+├── sql/
+│   └── postgresql-schema.sql
 ├── public/
 │   ├── app.js
 │   ├── index.html
 │   └── styles.css
 ├── src/
+│   ├── http.js
 │   ├── scoring.js
+│   ├── security.js
 │   ├── server.js
 │   └── store.js
 └── test/
-    └── scoring.test.js
+    ├── scoring.test.js
+    ├── security.test.js
+    └── store.test.js
 ```
 
 ## 3. 核心模块
@@ -48,6 +57,7 @@ gradeEvaluation/
 - 登录态处理
 - REST API 路由分发
 - 请求体解析、输入校验和统一错误返回
+- 审计、权限校验、导出下载、健康检查与监控接口
 
 ### 3.2 `src/store.js`
 
@@ -60,6 +70,7 @@ gradeEvaluation/
 - 批次、人员、评价体系管理
 - 评分记录创建、保存、提交
 - 统计结果、个人结果和分页列表查询
+- 员工自评、主管复核、多评委评分汇总与最终结果同步
 
 ### 3.3 `src/scoring.js`
 
@@ -71,6 +82,21 @@ gradeEvaluation/
 - 根据等级规则自动定级
 - 汇总维度统计和批次统计
 
+### 3.4 `src/security.js`
+
+负责：
+
+- 密码哈希与校验
+- 种子账号密码升级
+
+### 3.5 `src/http.js`
+
+负责：
+
+- 列表查询参数解析
+- JSON 请求体解析
+- HTTP 错误对象和分页辅助
+
 ## 4. 核心数据模型
 
 ### User
@@ -80,6 +106,8 @@ gradeEvaluation/
 - `password`
 - `name`
 - `role`
+- `personId`
+- `ssoSubject`
 
 ### Person
 
@@ -132,6 +160,35 @@ gradeEvaluation/
 - `scores`
 - `result`
 
+### ReviewSubmission
+
+- `id`
+- `cycleId`
+- `personId`
+- `reviewerId`
+- `reviewType`
+- `status`
+- `comments`
+- `scores`
+- `result`
+
+### AuditLog
+
+- `id`
+- `actorUserId`
+- `action`
+- `entityType`
+- `entityId`
+- `details`
+- `createdAt`
+
+### FrameworkTemplate
+
+- `id`
+- `name`
+- `description`
+- `framework`
+
 ## 5. 关键业务规则
 
 - 一个批次内一个人员只有一份最终评分记录
@@ -141,9 +198,8 @@ gradeEvaluation/
 
 ## 6. 后续演进建议
 
-- 从 SQLite 继续迁移到 MySQL 或 PostgreSQL
-- 增加员工自评、审批流、多评委汇总
-- 增加批量导入导出
-- 增加组织维度和时间趋势统计
-- 接入企业单点登录与审计日志
+- 从 SQLite 继续迁移到 PostgreSQL，并补充正式迁移脚本和数据校验
+- 将当前角色权限集扩展为更细粒度的资源权限和组织范围授权
+- 对审批流、汇总策略、导入模板增加更强的可配置能力
+- 将轻量 SSO 升级为可接入企业标准身份协议的实现
 - 若切换 PostgreSQL，可将当前单容器部署扩展为应用容器 + 数据库容器

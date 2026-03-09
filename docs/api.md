@@ -50,6 +50,7 @@
 - 人员列表
 - 批次列表
 - 评价记录摘要
+- 当前用户角色可见的结果与评审上下文
 
 ## 3. 批次接口
 
@@ -93,6 +94,7 @@
 
 - `draft`
 - `active`
+- `closed`
 
 ## 4. 评价体系接口
 
@@ -126,6 +128,31 @@
 - `description`
 - `weight`
 - `isKeyItem`
+
+### `POST /api/cycles/:cycleId/framework/import`
+
+将 JSON 格式的评价体系导入到指定草稿批次。
+
+请求体支持：
+
+- `framework`：直接传对象
+- `content`：传 JSON 字符串
+
+示例：
+
+```json
+{
+  "content": "{\"name\":\"导入体系\",\"levels\":[],\"dimensions\":[]}"
+}
+```
+
+### `GET /api/framework-templates`
+
+获取可用规则模板。
+
+### `POST /api/cycles/:cycleId/framework/apply-template`
+
+将指定模板应用到草稿批次。
 
 ## 5. 人员接口
 
@@ -216,7 +243,47 @@
 
 提交评分结果。
 
-## 7. 结果接口
+## 7. 评审工作流接口
+
+### `GET /api/reviews/:cycleId/people/:personId`
+
+获取某人在某批次下的所有评审记录。
+
+### `GET /api/reviews/:cycleId/people/:personId/form`
+
+获取当前用户在指定 `reviewType` 下的评审表单。
+
+查询参数：
+
+- `reviewType=self|peer|supervisor`
+
+### `PUT /api/reviews/:cycleId/people/:personId/scores`
+
+保存评审得分。
+
+请求体：
+
+```json
+{
+  "reviewType": "peer",
+  "scores": {
+    "item-platform-architecture": 3
+  },
+  "comments": "表现稳定"
+}
+```
+
+支持 `self / peer / supervisor`。
+
+### `POST /api/reviews/:cycleId/people/:personId/submit`
+
+提交评审记录。
+
+### `PATCH /api/reviews/:reviewId/status`
+
+主管或管理员审核评审记录，支持 `approved / rejected`。
+
+## 8. 结果接口
 
 ### `GET /api/results/:cycleId/people/:personId`
 
@@ -270,49 +337,19 @@
 - `format=csv`
 - `format=json`
 
-### `POST /api/cycles/:cycleId/framework/import`
-
-将 JSON 格式的评价体系导入到指定草稿批次。
-
-示例：
-
-```json
-{
-  "content": "{\"name\":\"导入体系\",\"levels\":[],\"dimensions\":[]}"
-}
-```
-
-### `GET /api/framework-templates`
-
-获取可用规则模板。
-
-### `POST /api/cycles/:cycleId/framework/apply-template`
-
-将指定模板应用到草稿批次。
-
-### `GET /api/reviews/:cycleId/people/:personId`
-
-获取某人在某批次下的所有评审记录。
-
-### `GET /api/reviews/:cycleId/people/:personId/form`
-
-获取当前用户在指定 `reviewType` 下的评审表单。
-
-### `PUT /api/reviews/:cycleId/people/:personId/scores`
-
-保存评审得分，支持 `self / peer / supervisor`。
-
-### `POST /api/reviews/:cycleId/people/:personId/submit`
-
-提交评审记录。
-
-### `PATCH /api/reviews/:reviewId/status`
-
-主管或管理员审核评审记录，支持 `approved / rejected`。
+## 9. 审计与运维接口
 
 ### `GET /api/audit-logs`
 
 分页获取审计日志。
+
+支持查询参数：
+
+- `page`
+- `pageSize`
+- `keyword`
+- `sortBy`：`createdAt / action / entityType`
+- `sortOrder`：`asc / desc`
 
 ### `GET /healthz`
 

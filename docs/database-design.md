@@ -22,6 +22,10 @@
 - `framework_score_items`
 - `evaluations`
 - `evaluation_scores`
+- `review_submissions`
+- `review_submission_scores`
+- `audit_logs`
+- `framework_templates`
 
 ## 3. 详细表设计
 
@@ -33,9 +37,11 @@
 | --- | --- | --- |
 | `id` | `uuid` | 主键 |
 | `username` | `varchar(64)` | 登录名，唯一 |
-| `password_hash` | `varchar(255)` | 密码哈希 |
+| `password` | `varchar(255)` | 密码哈希 |
 | `name` | `varchar(128)` | 用户姓名 |
-| `role` | `varchar(32)` | `admin` / `reviewer` |
+| `role` | `varchar(32)` | `admin` / `reviewer` / `employee` / `supervisor` / `auditor` |
+| `person_id` | `uuid` | 关联员工档案，可为空 |
+| `sso_subject` | `varchar(128)` | SSO 映射标识，可为空 |
 | `created_at` | `timestamp` | 创建时间 |
 | `updated_at` | `timestamp` | 更新时间 |
 
@@ -84,7 +90,6 @@
 | `name` | `varchar(128)` | 体系名称 |
 | `score_options_json` | `jsonb` | 评分档位，默认 `[0,1,3]` |
 | `weight_options_json` | `jsonb` | 权重档位，默认 `[1,1.5,2]` |
-| `created_by` | `uuid` | 创建人 |
 | `created_at` | `timestamp` | 创建时间 |
 
 说明：
@@ -200,6 +205,80 @@
 
 - `(evaluation_id, score_item_id)` 唯一
 
+### 3.11 `review_submissions`
+
+多评委、自评、主管复核的独立评审记录。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `uuid` | 主键 |
+| `cycle_id` | `uuid` | 所属批次 |
+| `person_id` | `uuid` | 被评价人员 |
+| `reviewer_id` | `uuid` | 评审人 |
+| `review_type` | `varchar(32)` | `self` / `peer` / `supervisor` |
+| `status` | `varchar(32)` | `draft` / `submitted` / `approved` / `rejected` |
+| `comments` | `text` | 评语 |
+| `raw_score` | `numeric(10,2)` | 原始分 |
+| `weighted_score` | `numeric(10,2)` | 加权得分 |
+| `weighted_max_score` | `numeric(10,2)` | 加权满分 |
+| `score_rate` | `numeric(6,4)` | 综合得分率 |
+| `key_score_rate` | `numeric(6,4)` | 关键项得分率 |
+| `level_id` | `uuid` | 评审等级 |
+| `level_name` | `varchar(64)` | 评审等级名 |
+| `submitted_at` | `timestamp` | 提交时间 |
+| `approved_at` | `timestamp` | 审批通过时间 |
+| `rejected_at` | `timestamp` | 审批驳回时间 |
+| `created_at` | `timestamp` | 创建时间 |
+| `updated_at` | `timestamp` | 更新时间 |
+
+约束：
+
+- `(cycle_id, person_id, reviewer_id, review_type)` 唯一
+
+### 3.12 `review_submission_scores`
+
+独立评审记录的逐项打分明细。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `uuid` | 主键 |
+| `submission_id` | `uuid` | 所属评审记录 |
+| `score_item_id` | `uuid` | 评分项 |
+| `score_value` | `numeric(10,2)` | 评分值 |
+| `weighted_score` | `numeric(10,2)` | 加权得分 |
+| `created_at` | `timestamp` | 创建时间 |
+| `updated_at` | `timestamp` | 更新时间 |
+
+约束：
+
+- `(submission_id, score_item_id)` 唯一
+
+### 3.13 `audit_logs`
+
+操作审计日志。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `uuid` | 主键 |
+| `actor_user_id` | `uuid` | 操作人，可为空 |
+| `action` | `varchar(128)` | 动作标识 |
+| `entity_type` | `varchar(64)` | 实体类型 |
+| `entity_id` | `varchar(128)` | 实体标识 |
+| `details_json` | `text` | 变更明细 JSON |
+| `created_at` | `timestamp` | 创建时间 |
+
+### 3.14 `framework_templates`
+
+评价体系规则模板。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `uuid` | 主键 |
+| `name` | `varchar(128)` | 模板名称，唯一 |
+| `description` | `text` | 模板描述 |
+| `framework_json` | `text` | 模板快照 JSON |
+| `created_at` | `timestamp` | 创建时间 |
+
 ## 4. 关系说明
 
 ```text
@@ -214,6 +293,11 @@ evaluations n --- 1 people
 evaluations n --- 1 users(reviewer)
 evaluations 1 --- n evaluation_scores
 evaluation_scores n --- 1 framework_score_items
+review_submissions n --- 1 evaluation_cycles
+review_submissions n --- 1 people
+review_submissions n --- 1 users(reviewer)
+review_submissions 1 --- n review_submission_scores
+review_submission_scores n --- 1 framework_score_items
 ```
 
 ## 5. 关键查询场景
@@ -247,7 +331,9 @@ evaluation_scores n --- 1 framework_score_items
 
 - 等级人数分布
 - 各维度平均得分率
+- 部门/岗位分布与平均得分率
 - 个人结果列表
+- 多批次趋势分析
 
 ## 6. 当前实现说明
 
@@ -265,4 +351,4 @@ evaluation_scores n --- 1 framework_score_items
 1. 保持当前表结构语义不变
 2. 将 `src/store.js` 中的 SQL 访问替换为新的数据库访问实现
 3. 保留评分计算逻辑在服务层复用
-4. 引入密码哈希、审计日志和导入导出能力
+4. 保留评审工作流、模板、审计日志和导入导出能力
