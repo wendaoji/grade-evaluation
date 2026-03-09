@@ -1,0 +1,15 @@
+services:
+  grade-evaluation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: grade-evaluation-app
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      GRADE_EVAL_DB_PATH: /app/data/grade-evaluation.db
+      GRADE_EVAL_SEED_PATH: /app/data/store.json
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

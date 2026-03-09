@@ -7,6 +7,7 @@
 - 前端静态页面负责展示配置、评分和统计界面
 - 后端 HTTP 服务提供认证、配置、评分和结果接口
 - SQLite 数据库作为持久化存储，首次启动从 JSON 种子导入演示数据
+- 支持通过 Docker / Docker Compose 进行单容器部署
 
 ## 2. 目录结构
 
@@ -15,6 +16,8 @@ gradeEvaluation/
 ├── data/
 │   ├── grade-evaluation.db
 │   └── store.json
+├── Dockerfile
+├── docker-compose.yml
 ├── docs/
 │   ├── api.md
 │   ├── architecture.md
@@ -141,3 +144,4 @@ gradeEvaluation/
 - 增加批量导入导出
 - 增加组织维度和时间趋势统计
 - 接入企业单点登录与审计日志
+- 若切换 PostgreSQL，可将当前单容器部署扩展为应用容器 + 数据库容器

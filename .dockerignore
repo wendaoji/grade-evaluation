@@ -1,0 +1,10 @@
+.git
+.gitignore
+node_modules
+npm-debug.log
+data/*.db
+data/*.db-shm
+data/*.db-wal
+test
+docs
+README.md

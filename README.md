@@ -18,6 +18,37 @@ npm start
 
 默认访问地址：`http://localhost:3000`
 
+## 容器部署
+
+### Docker
+
+构建镜像：
+
+```bash
+docker build -t grade-evaluation .
+```
+
+启动容器：
+
+```bash
+docker run -d --name grade-evaluation \
+  -p 3000:3000 \
+  -v "$(pwd)/data:/app/data" \
+  grade-evaluation
+```
+
+### Docker Compose
+
+```bash
+docker compose up -d --build
+```
+
+说明：
+
+- 容器内服务监听 `3000`
+- SQLite 数据库和种子文件通过挂载本地 `data/` 目录持久化
+- 首次启动时若数据库为空，仍会自动从 `data/store.json` 导入默认数据
+
 ## 测试
 
 ```bash
