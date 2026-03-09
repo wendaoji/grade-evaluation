@@ -2,12 +2,16 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { HttpError, parseJsonBody, parseListQuery } from "./http.js";
 import {
   authenticate,
   createCycle,
   createPerson,
+  getCyclesList,
   getCycleAnalytics,
+  getCyclePersonalResults,
   getEvaluationForm,
+  getPeopleList,
   getPersonResult,
   getPublicAppState,
   saveEvaluationScores,
@@ -83,7 +87,7 @@ async function readBody(request) {
     chunks.push(chunk);
   }
   const text = Buffer.concat(chunks).toString("utf8");
-  return text ? JSON.parse(text) : {};
+  return parseJsonBody(text);
 }
 
 function serveStatic(request, response) {
@@ -109,10 +113,12 @@ const server = http.createServer(async (request, response) => {
 
     if (method === "POST" && url.pathname === "/api/auth/login") {
       const body = await readBody(request);
+      if (!body.username || !body.password) {
+        throw new HttpError(400, "用户名和密码不能为空");
+      }
       const user = authenticate(body.username, body.password);
       if (!user) {
-        sendJson(response, 401, { message: "用户名或密码错误" });
-        return;
+        throw new HttpError(401, "用户名或密码错误");
       }
       const sessionId = randomUUID();
       sessions.set(sessionId, user);
@@ -146,6 +152,14 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       sendJson(response, 200, getPublicAppState(user.role));
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/api/cycles") {
+      if (!requireUser(request, response)) {
+        return;
+      }
+      sendJson(response, 200, getCyclesList(parseListQuery(url.searchParams)));
       return;
     }
 
@@ -184,6 +198,14 @@ const server = http.createServer(async (request, response) => {
       }
       const body = await readBody(request);
       sendJson(response, 201, createPerson(body));
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/api/people") {
+      if (!requireUser(request, response)) {
+        return;
+      }
+      sendJson(response, 200, getPeopleList(parseListQuery(url.searchParams, { defaultSortBy: "employeeNo" })));
       return;
     }
 
@@ -251,6 +273,22 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    const personalResultsMatch = url.pathname.match(/^\/api\/results\/([^/]+)\/personal-results$/);
+    if (method === "GET" && personalResultsMatch) {
+      if (!requireUser(request, response)) {
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        getCyclePersonalResults(
+          personalResultsMatch[1],
+          parseListQuery(url.searchParams, { defaultSortBy: "scoreRate" })
+        )
+      );
+      return;
+    }
+
     if (!url.pathname.startsWith("/api/")) {
       serveStatic(request, response);
       return;
@@ -258,7 +296,11 @@ const server = http.createServer(async (request, response) => {
 
     sendJson(response, 404, { message: "接口不存在" });
   } catch (error) {
-    sendJson(response, 400, { message: error.message || "请求处理失败" });
+    const statusCode = error instanceof HttpError ? error.statusCode : 500;
+    sendJson(response, statusCode, {
+      message: error.message || "请求处理失败",
+      details: error instanceof HttpError ? error.details : undefined
+    });
   }
 });
 
