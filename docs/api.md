@@ -36,6 +36,10 @@
 
 获取当前登录用户。
 
+### `POST /api/auth/sso-login`
+
+通过请求头 `x-sso-user` 或查询参数 `username` 登录已映射账号。
+
 ## 2. 应用总览接口
 
 ### `GET /api/app-state`
@@ -241,6 +245,10 @@
 - `positionDistribution`
 - `personalResults`
 
+### `GET /api/results/trends`
+
+获取多批次趋势分析结果。
+
 ### `GET /api/results/:cycleId/personal-results`
 
 分页查询某批次的个人结果列表。
@@ -273,3 +281,51 @@
   "content": "{\"name\":\"导入体系\",\"levels\":[],\"dimensions\":[]}"
 }
 ```
+
+### `GET /api/framework-templates`
+
+获取可用规则模板。
+
+### `POST /api/cycles/:cycleId/framework/apply-template`
+
+将指定模板应用到草稿批次。
+
+### `GET /api/reviews/:cycleId/people/:personId`
+
+获取某人在某批次下的所有评审记录。
+
+### `GET /api/reviews/:cycleId/people/:personId/form`
+
+获取当前用户在指定 `reviewType` 下的评审表单。
+
+### `PUT /api/reviews/:cycleId/people/:personId/scores`
+
+保存评审得分，支持 `self / peer / supervisor`。
+
+### `POST /api/reviews/:cycleId/people/:personId/submit`
+
+提交评审记录。
+
+### `PATCH /api/reviews/:reviewId/status`
+
+主管或管理员审核评审记录，支持 `approved / rejected`。
+
+### `GET /api/audit-logs`
+
+分页获取审计日志。
+
+### `GET /healthz`
+
+健康检查。
+
+### `GET /readyz`
+
+就绪检查。
+
+### `GET /metrics`
+
+运行监控指标。
+
+### `POST /api/admin/backup`
+
+生成数据库备份。

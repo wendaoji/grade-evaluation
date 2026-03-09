@@ -4,20 +4,33 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { HttpError, parseJsonBody, parseListQuery } from "./http.js";
 import {
+  applyFrameworkTemplate,
   authenticate,
+  authenticateSSO,
+  backupDatabase,
+  changeReviewStatus,
   createCycle,
   createPerson,
   exportCycleResults,
+  getAuditLogs,
   getCyclesList,
   getCycleAnalytics,
   getCyclePersonalResults,
   getEvaluationForm,
+  getFrameworkTemplates,
+  getMonitoringSnapshot,
   getPeopleList,
   getPersonResult,
   getPublicAppState,
+  getReviewForm,
+  getReviewSubmissions,
+  getTrendAnalytics,
   importFrameworkToCycle,
   importPeopleBatch,
+  recordAuditLog,
   saveEvaluationScores,
+  saveReviewScores,
+  submitReview,
   submitEvaluation,
   updateCycleStatus,
   updateFramework,
@@ -27,6 +40,13 @@ import {
 const sessions = new Map();
 const publicDir = path.resolve(process.cwd(), "public");
 const port = Number(process.env.PORT ?? 3000);
+const permissions = {
+  admin: new Set(["*"]),
+  reviewer: new Set(["review:peer", "results:view", "cycles:view", "people:view"]),
+  employee: new Set(["review:self", "results:view:self", "cycles:view"]),
+  supervisor: new Set(["review:supervisor", "review:approve", "results:view", "cycles:view", "people:view"]),
+  auditor: new Set(["audit:view", "results:view", "cycles:view", "people:view"])
+};
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -92,6 +112,47 @@ function requireAdmin(request, response) {
   return user;
 }
 
+function hasPermission(user, permission) {
+  const rolePermissions = permissions[user.role] ?? new Set();
+  return rolePermissions.has("*") || rolePermissions.has(permission);
+}
+
+function requirePermission(request, response, permission) {
+  const user = requireUser(request, response);
+  if (!user) {
+    return null;
+  }
+  if (!hasPermission(user, permission)) {
+    sendJson(response, 403, { message: "当前角色无权限执行该操作" });
+    return null;
+  }
+  return user;
+}
+
+function audit(user, action, entityType, entityId, details = {}) {
+  recordAuditLog(action, entityType, entityId, details, user?.id ?? null);
+}
+
+function resolveReviewType(user, explicitReviewType) {
+  const reviewType =
+    explicitReviewType || (user.role === "employee" ? "self" : user.role === "supervisor" ? "supervisor" : "peer");
+  const permissionMap = {
+    self: "review:self",
+    peer: "review:peer",
+    supervisor: "review:supervisor"
+  };
+  if (!hasPermission(user, permissionMap[reviewType])) {
+    throw new HttpError(403, "当前角色无权使用该评审类型");
+  }
+  return reviewType;
+}
+
+function assertReviewTargetAccess(user, personId) {
+  if (user.role === "employee" && user.person_id && user.person_id !== personId) {
+    throw new HttpError(403, "员工仅能对本人进行自评");
+  }
+}
+
 async function readBody(request) {
   const chunks = [];
   for await (const chunk of request) {
@@ -122,6 +183,21 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
     const method = request.method ?? "GET";
 
+    if (method === "GET" && url.pathname === "/healthz") {
+      sendJson(response, 200, { status: "ok" });
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/readyz") {
+      sendJson(response, 200, { status: "ready", snapshot: getMonitoringSnapshot() });
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/metrics") {
+      sendJson(response, 200, getMonitoringSnapshot());
+      return;
+    }
+
     if (method === "POST" && url.pathname === "/api/auth/login") {
       const body = await readBody(request);
       if (!body.username || !body.password) {
@@ -135,6 +211,22 @@ const server = http.createServer(async (request, response) => {
       sessions.set(sessionId, user);
       response.setHeader("Set-Cookie", `sessionId=${sessionId}; HttpOnly; Path=/; SameSite=Lax`);
       sendJson(response, 200, { user });
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/api/auth/sso-login") {
+      const username = request.headers["x-sso-user"] || url.searchParams.get("username");
+      if (!username) {
+        throw new HttpError(400, "缺少 SSO 用户标识");
+      }
+      const user = authenticateSSO(String(username));
+      if (!user) {
+        throw new HttpError(401, "SSO 用户未映射到系统账号");
+      }
+      const sessionId = randomUUID();
+      sessions.set(sessionId, user);
+      response.setHeader("Set-Cookie", `sessionId=${sessionId}; HttpOnly; Path=/; SameSite=Lax`);
+      sendJson(response, 200, { user, mode: "sso" });
       return;
     }
 
@@ -162,12 +254,47 @@ const server = http.createServer(async (request, response) => {
       if (!user) {
         return;
       }
-      sendJson(response, 200, getPublicAppState(user.role));
+      sendJson(response, 200, getPublicAppState(user.role, user.id));
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/api/framework-templates") {
+      if (!requireUser(request, response)) {
+        return;
+      }
+      sendJson(response, 200, { items: getFrameworkTemplates() });
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/api/results/trends") {
+      if (!requirePermission(request, response, "results:view")) {
+        return;
+      }
+      sendJson(response, 200, getTrendAnalytics());
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/api/audit-logs") {
+      if (!requirePermission(request, response, "audit:view")) {
+        return;
+      }
+      sendJson(response, 200, getAuditLogs(parseListQuery(url.searchParams)));
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/api/admin/backup") {
+      const user = requireAdmin(request, response);
+      if (!user) {
+        return;
+      }
+      const result = backupDatabase();
+      audit(user, "backup.create", "backup", result.filename, result);
+      sendJson(response, 200, result);
       return;
     }
 
     if (method === "GET" && url.pathname === "/api/cycles") {
-      if (!requireUser(request, response)) {
+      if (!requirePermission(request, response, "cycles:view")) {
         return;
       }
       sendJson(response, 200, getCyclesList(parseListQuery(url.searchParams)));
@@ -175,64 +302,95 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (method === "POST" && url.pathname === "/api/cycles") {
-      if (!requireAdmin(request, response)) {
+      const user = requireAdmin(request, response);
+      if (!user) {
         return;
       }
       const body = await readBody(request);
-      sendJson(response, 201, createCycle(body));
+      const cycle = createCycle(body);
+      audit(user, "cycle.create", "cycle", cycle.id, { name: cycle.name });
+      sendJson(response, 201, cycle);
       return;
     }
 
     const cycleStatusMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)\/status$/);
     if (method === "PATCH" && cycleStatusMatch) {
-      if (!requireAdmin(request, response)) {
+      const user = requireAdmin(request, response);
+      if (!user) {
         return;
       }
       const body = await readBody(request);
-      sendJson(response, 200, updateCycleStatus(cycleStatusMatch[1], body.status));
+      const cycle = updateCycleStatus(cycleStatusMatch[1], body.status);
+      audit(user, "cycle.status", "cycle", cycle.id, { status: body.status });
+      sendJson(response, 200, cycle);
       return;
     }
 
     const frameworkMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)\/framework$/);
     if (method === "PUT" && frameworkMatch) {
-      if (!requireAdmin(request, response)) {
+      const user = requireAdmin(request, response);
+      if (!user) {
         return;
       }
       const body = await readBody(request);
-      sendJson(response, 200, updateFramework(frameworkMatch[1], body));
+      const framework = updateFramework(frameworkMatch[1], body);
+      audit(user, "framework.update", "cycle", frameworkMatch[1], { frameworkId: framework.id });
+      sendJson(response, 200, framework);
       return;
     }
 
     const frameworkImportMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)\/framework\/import$/);
     if (method === "POST" && frameworkImportMatch) {
-      if (!requireAdmin(request, response)) {
+      const user = requireAdmin(request, response);
+      if (!user) {
         return;
       }
       const body = await readBody(request);
-      sendJson(response, 200, importFrameworkToCycle(frameworkImportMatch[1], body));
+      const framework = importFrameworkToCycle(frameworkImportMatch[1], body);
+      audit(user, "framework.import", "cycle", frameworkImportMatch[1], { frameworkId: framework.id });
+      sendJson(response, 200, framework);
+      return;
+    }
+
+    const frameworkTemplateMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)\/framework\/apply-template$/);
+    if (method === "POST" && frameworkTemplateMatch) {
+      const user = requireAdmin(request, response);
+      if (!user) {
+        return;
+      }
+      const body = await readBody(request);
+      const framework = applyFrameworkTemplate(frameworkTemplateMatch[1], body.templateId);
+      audit(user, "framework.applyTemplate", "cycle", frameworkTemplateMatch[1], { templateId: body.templateId });
+      sendJson(response, 200, framework);
       return;
     }
 
     if (method === "POST" && url.pathname === "/api/people") {
-      if (!requireAdmin(request, response)) {
+      const user = requireAdmin(request, response);
+      if (!user) {
         return;
       }
       const body = await readBody(request);
-      sendJson(response, 201, createPerson(body));
+      const person = createPerson(body);
+      audit(user, "person.create", "person", person.id, { employeeNo: person.employeeNo });
+      sendJson(response, 201, person);
       return;
     }
 
     if (method === "POST" && url.pathname === "/api/import/people") {
-      if (!requireAdmin(request, response)) {
+      const user = requireAdmin(request, response);
+      if (!user) {
         return;
       }
       const body = await readBody(request);
-      sendJson(response, 200, importPeopleBatch(body));
+      const result = importPeopleBatch(body);
+      audit(user, "people.import", "people", "batch", result);
+      sendJson(response, 200, result);
       return;
     }
 
     if (method === "GET" && url.pathname === "/api/people") {
-      if (!requireUser(request, response)) {
+      if (!requirePermission(request, response, "people:view")) {
         return;
       }
       sendJson(response, 200, getPeopleList(parseListQuery(url.searchParams, { defaultSortBy: "employeeNo" })));
@@ -241,11 +399,14 @@ const server = http.createServer(async (request, response) => {
 
     const personMatch = url.pathname.match(/^\/api\/people\/([^/]+)$/);
     if (method === "PUT" && personMatch) {
-      if (!requireAdmin(request, response)) {
+      const user = requireAdmin(request, response);
+      if (!user) {
         return;
       }
       const body = await readBody(request);
-      sendJson(response, 200, updatePerson(personMatch[1], body));
+      const person = updatePerson(personMatch[1], body);
+      audit(user, "person.update", "person", person.id, { employeeNo: person.employeeNo });
+      sendJson(response, 200, person);
       return;
     }
 
@@ -286,17 +447,24 @@ const server = http.createServer(async (request, response) => {
 
     const resultMatch = url.pathname.match(/^\/api\/results\/([^/]+)\/people\/([^/]+)$/);
     if (method === "GET" && resultMatch) {
-      if (!requireUser(request, response)) {
+      const user = requireUser(request, response);
+      if (!user) {
         return;
       }
       const [_, cycleId, personId] = resultMatch;
+      if (user.role === "employee" && user.person_id !== personId) {
+        throw new HttpError(403, "员工仅能查看本人结果");
+      }
+      if (user.role !== "employee" && !hasPermission(user, "results:view")) {
+        throw new HttpError(403, "当前角色无权限查看结果");
+      }
       sendJson(response, 200, getPersonResult(cycleId, personId));
       return;
     }
 
     const analyticsMatch = url.pathname.match(/^\/api\/results\/([^/]+)\/analytics$/);
     if (method === "GET" && analyticsMatch) {
-      if (!requireUser(request, response)) {
+      if (!requirePermission(request, response, "results:view")) {
         return;
       }
       sendJson(response, 200, getCycleAnalytics(analyticsMatch[1]));
@@ -305,7 +473,7 @@ const server = http.createServer(async (request, response) => {
 
     const exportMatch = url.pathname.match(/^\/api\/results\/([^/]+)\/export$/);
     if (method === "GET" && exportMatch) {
-      if (!requireUser(request, response)) {
+      if (!requirePermission(request, response, "results:view")) {
         return;
       }
       const exported = exportCycleResults(exportMatch[1], url.searchParams.get("format") || "csv");
@@ -315,7 +483,7 @@ const server = http.createServer(async (request, response) => {
 
     const personalResultsMatch = url.pathname.match(/^\/api\/results\/([^/]+)\/personal-results$/);
     if (method === "GET" && personalResultsMatch) {
-      if (!requireUser(request, response)) {
+      if (!requirePermission(request, response, "results:view")) {
         return;
       }
       sendJson(
@@ -326,6 +494,72 @@ const server = http.createServer(async (request, response) => {
           parseListQuery(url.searchParams, { defaultSortBy: "scoreRate" })
         )
       );
+      return;
+    }
+
+    const reviewListMatch = url.pathname.match(/^\/api\/reviews\/([^/]+)\/people\/([^/]+)$/);
+    if (method === "GET" && reviewListMatch) {
+      const user = requireUser(request, response);
+      if (!user) {
+        return;
+      }
+      assertReviewTargetAccess(user, reviewListMatch[2]);
+      sendJson(response, 200, { items: getReviewSubmissions(reviewListMatch[1], reviewListMatch[2]) });
+      return;
+    }
+
+    const reviewFormMatch = url.pathname.match(/^\/api\/reviews\/([^/]+)\/people\/([^/]+)\/form$/);
+    if (method === "GET" && reviewFormMatch) {
+      const user = requireUser(request, response);
+      if (!user) {
+        return;
+      }
+      assertReviewTargetAccess(user, reviewFormMatch[2]);
+      const reviewType = resolveReviewType(user, url.searchParams.get("reviewType"));
+      sendJson(response, 200, getReviewForm(reviewFormMatch[1], reviewFormMatch[2], user.id, reviewType));
+      return;
+    }
+
+    const reviewScoresMatch = url.pathname.match(/^\/api\/reviews\/([^/]+)\/people\/([^/]+)\/scores$/);
+    if (method === "PUT" && reviewScoresMatch) {
+      const user = requireUser(request, response);
+      if (!user) {
+        return;
+      }
+      assertReviewTargetAccess(user, reviewScoresMatch[2]);
+      const body = await readBody(request);
+      const reviewType = resolveReviewType(user, body.reviewType);
+      const result = saveReviewScores(reviewScoresMatch[1], reviewScoresMatch[2], user.id, reviewType, body.scores, body.comments || "");
+      audit(user, "review.save", "review", result.submission.id, { reviewType, personId: reviewScoresMatch[2] });
+      sendJson(response, 200, result);
+      return;
+    }
+
+    const reviewSubmitMatch = url.pathname.match(/^\/api\/reviews\/([^/]+)\/people\/([^/]+)\/submit$/);
+    if (method === "POST" && reviewSubmitMatch) {
+      const user = requireUser(request, response);
+      if (!user) {
+        return;
+      }
+      assertReviewTargetAccess(user, reviewSubmitMatch[2]);
+      const body = await readBody(request);
+      const reviewType = resolveReviewType(user, body.reviewType);
+      const result = submitReview(reviewSubmitMatch[1], reviewSubmitMatch[2], user.id, reviewType, body.comments || "");
+      audit(user, "review.submit", "review", result.submission.id, { reviewType, personId: reviewSubmitMatch[2] });
+      sendJson(response, 200, result);
+      return;
+    }
+
+    const reviewStatusMatch = url.pathname.match(/^\/api\/reviews\/([^/]+)\/status$/);
+    if (method === "PATCH" && reviewStatusMatch) {
+      const user = requirePermission(request, response, "review:approve");
+      if (!user) {
+        return;
+      }
+      const body = await readBody(request);
+      const result = changeReviewStatus(reviewStatusMatch[1], body.status);
+      audit(user, "review.status", "review", reviewStatusMatch[1], { status: body.status });
+      sendJson(response, 200, result);
       return;
     }
 

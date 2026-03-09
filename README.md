@@ -10,6 +10,7 @@
 - SQLite 数据库存储，并支持首次从 JSON 种子数据自动导入
 - 密码哈希存储、统一错误处理、列表分页筛选排序
 - 批量导入人员与评价体系、结果导出、部门/岗位统计
+- 多批次趋势分析、规则模板、员工自评/主管复核/多评委评审、审计日志、SSO、健康检查、数据库备份
 
 ## 启动
 
@@ -60,6 +61,10 @@ npm test
 
 - 管理员：`admin / admin123`
 - 评委：`reviewer / review123`
+- 主管：`supervisor / super123`
+- 审计：`auditor / audit123`
+- 员工示例：`employee_E001 / employee123`
+- 员工示例：`employee_E002 / employee123`
 
 系统会在首次导入或启动时自动将明文种子密码升级为哈希存储。
 
@@ -76,6 +81,20 @@ npm test
 - `POST /api/import/people`
 - `POST /api/cycles/:cycleId/framework/import`
 - `GET /api/results/:cycleId/export`
+- `GET /api/results/trends`
+- `GET /api/framework-templates`
+- `POST /api/cycles/:cycleId/framework/apply-template`
+- `GET /api/reviews/:cycleId/people/:personId`
+- `GET /api/reviews/:cycleId/people/:personId/form`
+- `PUT /api/reviews/:cycleId/people/:personId/scores`
+- `POST /api/reviews/:cycleId/people/:personId/submit`
+- `PATCH /api/reviews/:reviewId/status`
+- `GET /api/audit-logs`
+- `POST /api/auth/sso-login`
+- `GET /healthz`
+- `GET /readyz`
+- `GET /metrics`
+- `POST /api/admin/backup`
 
 这些接口支持以下查询参数：
 
@@ -92,3 +111,8 @@ npm test
 - 可通过环境变量 `GRADE_EVAL_DB_PATH` 和 `GRADE_EVAL_SEED_PATH` 指定数据库和种子文件位置
 - 当前实现已切换到 SQLite，适合单机开发和 MVP 验证
 - 若继续演进到生产环境，建议迁移到 PostgreSQL/MySQL，并补充更细粒度权限、批量导入、审计日志和多评委汇总机制
+
+## 运维与迁移
+
+- 运维能力说明见 [docs/operations.md](/Users/wendaoji/workspace/wendaoji/gradeEvaluation/docs/operations.md)
+- PostgreSQL 建表脚本见 [sql/postgresql-schema.sql](/Users/wendaoji/workspace/wendaoji/gradeEvaluation/sql/postgresql-schema.sql)

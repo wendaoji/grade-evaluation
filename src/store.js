@@ -37,6 +37,8 @@ function initializeDatabase() {
       password TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL,
+      person_id TEXT,
+      sso_subject TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -134,7 +136,62 @@ function initializeDatabase() {
       updated_at TEXT NOT NULL,
       UNIQUE(evaluation_id, score_item_id)
     );
+
+    CREATE TABLE IF NOT EXISTS review_submissions (
+      id TEXT PRIMARY KEY,
+      cycle_id TEXT NOT NULL REFERENCES evaluation_cycles(id) ON DELETE CASCADE,
+      person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      reviewer_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      review_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      comments TEXT NOT NULL DEFAULT '',
+      raw_score REAL NOT NULL DEFAULT 0,
+      weighted_score REAL NOT NULL DEFAULT 0,
+      weighted_max_score REAL NOT NULL DEFAULT 0,
+      score_rate REAL NOT NULL DEFAULT 0,
+      key_score_rate REAL,
+      level_id TEXT,
+      level_name TEXT,
+      submitted_at TEXT,
+      approved_at TEXT,
+      rejected_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(cycle_id, person_id, reviewer_id, review_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS review_submission_scores (
+      id TEXT PRIMARY KEY,
+      submission_id TEXT NOT NULL REFERENCES review_submissions(id) ON DELETE CASCADE,
+      score_item_id TEXT NOT NULL REFERENCES framework_score_items(id) ON DELETE CASCADE,
+      score_value REAL NOT NULL,
+      weighted_score REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(submission_id, score_item_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      actor_user_id TEXT,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      details_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS framework_templates (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL,
+      framework_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
+
+  ensureColumn("users", "person_id", "TEXT");
+  ensureColumn("users", "sso_subject", "TEXT");
 
   const userCount = database.prepare("SELECT COUNT(*) AS count FROM users").get().count;
   if (userCount === 0 && fs.existsSync(seedPath)) {
@@ -142,6 +199,15 @@ function initializeDatabase() {
   }
 
   upgradePlaintextPasswords();
+  ensureWorkflowSeedUsers();
+  ensureFrameworkTemplates();
+}
+
+function ensureColumn(tableName, columnName, columnDefinition) {
+  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!columns.some((column) => column.name === columnName)) {
+    database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+  }
 }
 
 function clone(value) {
@@ -222,6 +288,144 @@ function upgradePlaintextPasswords() {
       updatePassword.run(hashPassword(user.password), now(), user.id);
     }
   }
+}
+
+function ensureWorkflowSeedUsers() {
+  const insertUser = database.prepare(
+    `INSERT INTO users (id, username, password, name, role, person_id, sso_subject, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const users = database.prepare("SELECT username FROM users").all().map((row) => row.username);
+  const userSet = new Set(users);
+  const timestamp = now();
+
+  if (!userSet.has("supervisor")) {
+    insertUser.run(
+      randomUUID(),
+      "supervisor",
+      hashPassword("super123"),
+      "主管账号",
+      "supervisor",
+      null,
+      "supervisor",
+      timestamp,
+      timestamp
+    );
+    userSet.add("supervisor");
+  }
+
+  if (!userSet.has("auditor")) {
+    insertUser.run(
+      randomUUID(),
+      "auditor",
+      hashPassword("audit123"),
+      "审计账号",
+      "auditor",
+      null,
+      "auditor",
+      timestamp,
+      timestamp
+    );
+    userSet.add("auditor");
+  }
+
+  const people = database.prepare("SELECT id, employee_no, name FROM people").all();
+  for (const person of people) {
+    const username = `employee_${person.employee_no}`;
+    if (!userSet.has(username)) {
+      insertUser.run(
+        randomUUID(),
+        username,
+        hashPassword("employee123"),
+        `${person.name}自评账号`,
+        "employee",
+        person.id,
+        username,
+        timestamp,
+        timestamp
+      );
+      userSet.add(username);
+    }
+  }
+}
+
+function ensureFrameworkTemplates() {
+  const templates = [
+    {
+      id: "template-score-only",
+      name: "仅分数阈值",
+      description: "所有等级仅按得分率区间判定，不启用关键项规则",
+      transform: (framework) => ({
+        ...framework,
+        levels: framework.levels.map((level) => ({
+          ...level,
+          keyRule: { enabled: false, minKeyRate: null, disallowZeroKeyScore: false }
+        }))
+      })
+    },
+    {
+      id: "template-strict-key",
+      name: "严格关键项",
+      description: "高等级启用更严格的关键项最低得分率和零分限制",
+      transform: (framework) => ({
+        ...framework,
+        levels: framework.levels.map((level) => ({
+          ...level,
+          keyRule:
+            Number(level.order) >= Math.max(4, framework.levels.length - 1)
+              ? { enabled: true, minKeyRate: 0.8, disallowZeroKeyScore: true }
+              : { enabled: false, minKeyRate: null, disallowZeroKeyScore: false }
+        }))
+      })
+    },
+    {
+      id: "template-balanced",
+      name: "平衡模板",
+      description: "高等级保留适度关键项门槛，适合大多数场景",
+      transform: (framework) => ({
+        ...framework,
+        levels: framework.levels.map((level) => ({
+          ...level,
+          keyRule:
+            Number(level.order) >= Math.max(4, framework.levels.length - 1)
+              ? { enabled: true, minKeyRate: 0.6, disallowZeroKeyScore: false }
+              : { enabled: false, minKeyRate: null, disallowZeroKeyScore: false }
+        }))
+      })
+    }
+  ];
+
+  const upsertTemplate = database.prepare(
+    `INSERT OR REPLACE INTO framework_templates (id, name, description, framework_json, created_at)
+     VALUES (?, ?, ?, ?, ?)`
+  );
+  const referenceFramework = getAllCycles()[0]?.framework;
+  if (!referenceFramework) {
+    return;
+  }
+  for (const template of templates) {
+    upsertTemplate.run(
+      template.id,
+      template.name,
+      template.description,
+      JSON.stringify(template.transform(clone(referenceFramework))),
+      now()
+    );
+  }
+}
+
+function addAuditLog(action, entityType, entityId, details = {}, actorUserId = null) {
+  database
+    .prepare(
+      `INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, details_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(randomUUID(), actorUserId, action, entityType, entityId, JSON.stringify(details), now());
+}
+
+export function recordAuditLog(action, entityType, entityId, details = {}, actorUserId = null) {
+  addAuditLog(action, entityType, entityId, details, actorUserId);
+  return { ok: true };
 }
 
 function sanitizeFramework(framework, options = {}) {
@@ -484,6 +688,151 @@ function getEvaluationScoresMap(evaluationId) {
   );
 }
 
+function getReviewSubmissionRow(cycleId, personId, reviewerId, reviewType) {
+  return database
+    .prepare(
+      `SELECT * FROM review_submissions
+       WHERE cycle_id = ? AND person_id = ? AND reviewer_id = ? AND review_type = ?`
+    )
+    .get(cycleId, personId, reviewerId, reviewType);
+}
+
+function getReviewSubmissionScoresMap(submissionId) {
+  return Object.fromEntries(
+    database
+      .prepare("SELECT score_item_id, score_value FROM review_submission_scores WHERE submission_id = ?")
+      .all(submissionId)
+      .map((row) => [row.score_item_id, Number(row.score_value)])
+  );
+}
+
+function getUserById(userId) {
+  return database.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+}
+
+function enrichReviewSubmission(cycle, people, submissionRow) {
+  const scores = getReviewSubmissionScoresMap(submissionRow.id);
+  const reviewer = getUserById(submissionRow.reviewer_id);
+  return {
+    id: submissionRow.id,
+    cycleId: submissionRow.cycle_id,
+    personId: submissionRow.person_id,
+    reviewerId: submissionRow.reviewer_id,
+    reviewType: submissionRow.review_type,
+    status: submissionRow.status,
+    comments: submissionRow.comments,
+    reviewer: reviewer
+      ? {
+          id: reviewer.id,
+          username: reviewer.username,
+          name: reviewer.name,
+          role: reviewer.role,
+          personId: reviewer.person_id ?? null
+        }
+      : null,
+    person: people.find((person) => person.id === submissionRow.person_id) ?? null,
+    form: buildEvaluationForm(cycle.framework, scores),
+    result: buildStoredResult(calculateEvaluationResult(cycle.framework, scores))
+  };
+}
+
+function syncAggregateEvaluation(cycleId, personId) {
+  const cycle = getCycle(cycleId);
+  if (!cycle) {
+    return null;
+  }
+  const submissionRows = database
+    .prepare(
+      `SELECT * FROM review_submissions
+       WHERE cycle_id = ? AND person_id = ? AND status IN ('submitted', 'approved')`
+    )
+    .all(cycleId, personId);
+
+  const aggregateScores = {};
+  if (submissionRows.length > 0) {
+    const allItemIds = cycle.framework.dimensions
+      .flatMap((dimension) => dimension.categories)
+      .flatMap((category) => category.items)
+      .map((item) => item.id);
+
+    for (const itemId of allItemIds) {
+      let total = 0;
+      let count = 0;
+      for (const submission of submissionRows) {
+        const submissionScores = getReviewSubmissionScoresMap(submission.id);
+        if (submissionScores[itemId] !== undefined) {
+          total += Number(submissionScores[itemId]);
+          count += 1;
+        }
+      }
+      aggregateScores[itemId] = count ? total / count : 0;
+    }
+  }
+
+  const result = calculateEvaluationResult(cycle.framework, aggregateScores);
+  const existing = getEvaluationRow(cycleId, personId);
+  const timestamp = now();
+  if (!existing) {
+    database
+      .prepare(
+        `INSERT INTO evaluations
+          (id, cycle_id, person_id, reviewer_id, status, raw_score, weighted_score, weighted_max_score, score_rate, key_score_rate, has_zero_key_score, level_id, level_name, submitted_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        randomUUID(),
+        cycleId,
+        personId,
+        null,
+        submissionRows.length ? "aggregated" : "draft",
+        result.rawScore,
+        result.weightedScore,
+        result.weightedMaxScore,
+        result.scoreRate,
+        result.keyScoreRate,
+        result.hasZeroKeyScore ? 1 : 0,
+        result.levelId,
+        result.levelName,
+        submissionRows.length ? timestamp : null,
+        timestamp,
+        timestamp
+      );
+  } else {
+    database
+      .prepare(
+        `UPDATE evaluations
+         SET reviewer_id = NULL,
+             status = ?,
+             raw_score = ?,
+             weighted_score = ?,
+             weighted_max_score = ?,
+             score_rate = ?,
+             key_score_rate = ?,
+             has_zero_key_score = ?,
+             level_id = ?,
+             level_name = ?,
+             submitted_at = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .run(
+        submissionRows.length ? "aggregated" : "draft",
+        result.rawScore,
+        result.weightedScore,
+        result.weightedMaxScore,
+        result.scoreRate,
+        result.keyScoreRate,
+        result.hasZeroKeyScore ? 1 : 0,
+        result.levelId,
+        result.levelName,
+        submissionRows.length ? timestamp : null,
+        timestamp,
+        existing.id
+      );
+  }
+  return result;
+}
+
 function buildStoredResult(result) {
   return {
     rawScore: Number(result.rawScore ?? 0),
@@ -672,14 +1021,19 @@ function persistEvaluationResult(connection, evaluationId, result, status) {
     );
 }
 
-export function getPublicAppState(role) {
+export function getPublicAppState(role, userId = null) {
   const cycles = getAllCycles();
+  const currentUser = userId ? getUserById(userId) : null;
+  const people =
+    role === "employee" && currentUser?.person_id
+      ? getPeople().filter((person) => person.id === currentUser.person_id)
+      : getPeople();
   return {
     users:
       role === "admin"
         ? getUsers().map(({ password, created_at, updated_at, ...user }) => user)
         : undefined,
-    people: getPeople(),
+    people,
     cycles,
     evaluations: database
       .prepare("SELECT id, cycle_id, person_id, status, level_name, score_rate FROM evaluations")
@@ -698,6 +1052,17 @@ export function getPublicAppState(role) {
 export function authenticate(username, password) {
   const user = database.prepare("SELECT * FROM users WHERE username = ?").get(username);
   if (!user || !verifyPassword(password, user.password)) {
+    return null;
+  }
+  const { password: _password, created_at, updated_at, ...safeUser } = user;
+  return safeUser;
+}
+
+export function authenticateSSO(subject) {
+  const user = database
+    .prepare("SELECT * FROM users WHERE username = ? OR sso_subject = ?")
+    .get(subject, subject);
+  if (!user) {
     return null;
   }
   const { password: _password, created_at, updated_at, ...safeUser } = user;
@@ -797,6 +1162,7 @@ export function createPerson(input) {
       createdAt,
       createdAt
     );
+  ensureWorkflowSeedUsers();
   return person;
 }
 
@@ -1069,6 +1435,7 @@ export function importPeopleBatch(input) {
       }
     }
 
+    ensureWorkflowSeedUsers();
     return { mode, total: rows.length, created, updated };
   });
 }
@@ -1128,4 +1495,266 @@ export function exportCycleResults(cycleId, format = "csv") {
       "status"
     ])
   };
+}
+
+export function getTrendAnalytics() {
+  const cycles = getAllCycles();
+  return {
+    cycles: cycles.map((cycle) => {
+      const analytics = getCycleAnalytics(cycle.id);
+      const averageScoreRate = analytics.personalResults.length
+        ? Number(
+            (
+              analytics.personalResults.reduce((sum, item) => sum + Number(item.scoreRate || 0), 0) /
+              analytics.personalResults.length
+            ).toFixed(4)
+          )
+        : 0;
+      return {
+        cycleId: cycle.id,
+        cycleName: cycle.name,
+        createdAt: cycle.createdAt,
+        averageScoreRate,
+        levelDistribution: analytics.levelDistribution
+      };
+    })
+  };
+}
+
+export function getFrameworkTemplates() {
+  return database
+    .prepare("SELECT * FROM framework_templates ORDER BY created_at ASC")
+    .all()
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      framework: JSON.parse(row.framework_json)
+    }));
+}
+
+export function applyFrameworkTemplate(cycleId, templateId) {
+  const template = database.prepare("SELECT * FROM framework_templates WHERE id = ?").get(templateId);
+  if (!template) {
+    throw new HttpError(404, "模板不存在");
+  }
+  return importFrameworkToCycle(cycleId, { framework: JSON.parse(template.framework_json) });
+}
+
+export function getAuditLogs(query) {
+  const logs = database
+    .prepare("SELECT * FROM audit_logs ORDER BY created_at DESC")
+    .all()
+    .map((row) => ({
+      id: row.id,
+      actorUserId: row.actor_user_id,
+      action: row.action,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      details: JSON.parse(row.details_json),
+      createdAt: row.created_at
+    }));
+  const filtered = logs.filter((item) => {
+    if (!query.keyword) {
+      return true;
+    }
+    return `${item.action} ${item.entityType} ${item.entityId}`.toLowerCase().includes(query.keyword.toLowerCase());
+  });
+  return sortAndPaginate(filtered, query, {
+    createdAt: (item) => item.createdAt,
+    action: (item) => item.action,
+    entityType: (item) => item.entityType
+  });
+}
+
+export function getMonitoringSnapshot() {
+  return {
+    users: database.prepare("SELECT COUNT(*) AS count FROM users").get().count,
+    people: database.prepare("SELECT COUNT(*) AS count FROM people").get().count,
+    cycles: database.prepare("SELECT COUNT(*) AS count FROM evaluation_cycles").get().count,
+    evaluations: database.prepare("SELECT COUNT(*) AS count FROM evaluations").get().count,
+    reviewSubmissions: database.prepare("SELECT COUNT(*) AS count FROM review_submissions").get().count,
+    auditLogs: database.prepare("SELECT COUNT(*) AS count FROM audit_logs").get().count,
+    dbPath
+  };
+}
+
+export function backupDatabase(backupDir = path.join(dataDir, "backups")) {
+  fs.mkdirSync(backupDir, { recursive: true });
+  const filename = `grade-evaluation-${now().replace(/[:.]/g, "-")}.db`;
+  const targetPath = path.join(backupDir, filename);
+  fs.copyFileSync(dbPath, targetPath);
+  return { targetPath, filename };
+}
+
+export function getReviewSubmissions(cycleId, personId) {
+  const cycle = getCycle(cycleId);
+  if (!cycle) {
+    throw new HttpError(404, "评价批次不存在");
+  }
+  const people = getPeople();
+  return database
+    .prepare(
+      `SELECT * FROM review_submissions
+       WHERE cycle_id = ? AND person_id = ?
+       ORDER BY created_at ASC`
+    )
+    .all(cycleId, personId)
+    .map((row) => enrichReviewSubmission(cycle, people, row));
+}
+
+export function getReviewForm(cycleId, personId, reviewerId, reviewType = "peer") {
+  const cycle = getCycle(cycleId);
+  if (!cycle) {
+    throw new HttpError(404, "评价批次不存在");
+  }
+  const people = getPeople();
+  const person = people.find((item) => item.id === personId);
+  if (!person) {
+    throw new HttpError(404, "人员不存在");
+  }
+  let submission = getReviewSubmissionRow(cycleId, personId, reviewerId, reviewType);
+  if (!submission) {
+    const createdAt = now();
+    database
+      .prepare(
+        `INSERT INTO review_submissions
+          (id, cycle_id, person_id, reviewer_id, review_type, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(randomUUID(), cycleId, personId, reviewerId, reviewType, "draft", createdAt, createdAt);
+    submission = getReviewSubmissionRow(cycleId, personId, reviewerId, reviewType);
+  }
+  return {
+    cycle,
+    person,
+    submission: enrichReviewSubmission(cycle, people, submission)
+  };
+}
+
+export function saveReviewScores(cycleId, personId, reviewerId, reviewType, scores, comments = "") {
+  const cycle = getCycle(cycleId);
+  if (!cycle) {
+    throw new HttpError(404, "评价批次不存在");
+  }
+  let submission = getReviewSubmissionRow(cycleId, personId, reviewerId, reviewType);
+  if (!submission) {
+    getReviewForm(cycleId, personId, reviewerId, reviewType);
+    submission = getReviewSubmissionRow(cycleId, personId, reviewerId, reviewType);
+  }
+  const normalizedScores = Object.fromEntries(
+    Object.entries(scores ?? {}).map(([itemId, score]) => [itemId, Number(score)])
+  );
+  for (const value of Object.values(normalizedScores)) {
+    if (![0, 1, 3].includes(value)) {
+      throw new HttpError(400, "评分值仅允许 0、1、3");
+    }
+  }
+  const itemsById = new Map(
+    cycle.framework.dimensions
+      .flatMap((dimension) => dimension.categories)
+      .flatMap((category) => category.items)
+      .map((item) => [item.id, item])
+  );
+  const result = calculateEvaluationResult(cycle.framework, normalizedScores);
+
+  runInTransaction(() => {
+    database.prepare("DELETE FROM review_submission_scores WHERE submission_id = ?").run(submission.id);
+    const insertScore = database.prepare(
+      `INSERT INTO review_submission_scores
+        (id, submission_id, score_item_id, score_value, weighted_score, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    const timestamp = now();
+    for (const [itemId, score] of Object.entries(normalizedScores)) {
+      const item = itemsById.get(itemId);
+      if (!item) {
+        continue;
+      }
+      insertScore.run(
+        randomUUID(),
+        submission.id,
+        itemId,
+        score,
+        Number(score) * Number(item.weight ?? 1),
+        timestamp,
+        timestamp
+      );
+    }
+    database
+      .prepare(
+        `UPDATE review_submissions
+         SET comments = ?, status = 'draft', raw_score = ?, weighted_score = ?, weighted_max_score = ?, score_rate = ?, key_score_rate = ?, level_id = ?, level_name = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(
+        comments,
+        result.rawScore,
+        result.weightedScore,
+        result.weightedMaxScore,
+        result.scoreRate,
+        result.keyScoreRate,
+        result.levelId,
+        result.levelName,
+        timestamp,
+        submission.id
+      );
+  });
+  return getReviewForm(cycleId, personId, reviewerId, reviewType);
+}
+
+export function submitReview(cycleId, personId, reviewerId, reviewType, comments = "") {
+  let submission = getReviewSubmissionRow(cycleId, personId, reviewerId, reviewType);
+  if (!submission) {
+    throw new HttpError(404, "尚未开始评分");
+  }
+  const scores = getReviewSubmissionScoresMap(submission.id);
+  const cycle = getCycle(cycleId);
+  const result = calculateEvaluationResult(cycle.framework, scores);
+  const status = reviewType === "supervisor" ? "approved" : "submitted";
+  runInTransaction(() => {
+    database
+      .prepare(
+        `UPDATE review_submissions
+         SET comments = ?, status = ?, raw_score = ?, weighted_score = ?, weighted_max_score = ?, score_rate = ?, key_score_rate = ?, level_id = ?, level_name = ?, submitted_at = ?, approved_at = CASE WHEN ? = 'approved' THEN ? ELSE approved_at END, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(
+        comments,
+        status,
+        result.rawScore,
+        result.weightedScore,
+        result.weightedMaxScore,
+        result.scoreRate,
+        result.keyScoreRate,
+        result.levelId,
+        result.levelName,
+        now(),
+        status,
+        status === "approved" ? now() : null,
+        now(),
+        submission.id
+      );
+    syncAggregateEvaluation(cycleId, personId);
+  });
+  return getReviewForm(cycleId, personId, reviewerId, reviewType);
+}
+
+export function changeReviewStatus(submissionId, status) {
+  if (!["approved", "rejected"].includes(status)) {
+    throw new HttpError(400, "审核状态不合法");
+  }
+  const submission = database.prepare("SELECT * FROM review_submissions WHERE id = ?").get(submissionId);
+  if (!submission) {
+    throw new HttpError(404, "评审记录不存在");
+  }
+  database
+    .prepare(
+      `UPDATE review_submissions
+       SET status = ?, approved_at = CASE WHEN ? = 'approved' THEN ? ELSE approved_at END, rejected_at = CASE WHEN ? = 'rejected' THEN ? ELSE rejected_at END, updated_at = ?
+       WHERE id = ?`
+    )
+    .run(status, status, now(), status, now(), now(), submissionId);
+  syncAggregateEvaluation(submission.cycle_id, submission.person_id);
+  return database.prepare("SELECT * FROM review_submissions WHERE id = ?").get(submissionId);
 }

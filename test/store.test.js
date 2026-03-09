@@ -91,3 +91,58 @@ test("store imports people batch and exports cycle results", async () => {
   delete process.env.GRADE_EVAL_DB_PATH;
   delete process.env.GRADE_EVAL_SEED_PATH;
 });
+
+test("store supports review workflow, templates, trends, and backup", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "grade-eval-db-"));
+  const dbFile = path.join(tempDir, "grade-evaluation.db");
+  const seedFile = path.resolve(process.cwd(), "data/store.json");
+
+  process.env.GRADE_EVAL_DB_PATH = dbFile;
+  process.env.GRADE_EVAL_SEED_PATH = seedFile;
+
+  const storeModule = await import(
+    `${pathToFileURL(path.resolve(process.cwd(), "src/store.js")).href}?test=${Date.now()}-4`
+  );
+
+  const employee = storeModule.authenticate("employee_E001", "employee123");
+  const supervisor = storeModule.authenticate("supervisor", "super123");
+  assert.equal(employee.role, "employee");
+  assert.equal(supervisor.role, "supervisor");
+
+  const templates = storeModule.getFrameworkTemplates();
+  assert.equal(templates.length >= 1, true);
+
+  storeModule.getReviewForm("cycle-2026-h1", "person-zhangsan", employee.id, "self");
+  storeModule.saveReviewScores(
+    "cycle-2026-h1",
+    "person-zhangsan",
+    employee.id,
+    "self",
+    {
+      "item-platform-architecture": 3,
+      "item-scene-landing": 1
+    },
+    "员工自评"
+  );
+  const submitted = storeModule.submitReview(
+    "cycle-2026-h1",
+    "person-zhangsan",
+    employee.id,
+    "self",
+    "提交自评"
+  );
+  assert.equal(submitted.submission.status, "submitted");
+
+  const workflowItems = storeModule.getReviewSubmissions("cycle-2026-h1", "person-zhangsan");
+  assert.equal(workflowItems.length >= 1, true);
+
+  storeModule.changeReviewStatus(workflowItems[0].id, "approved");
+  const trends = storeModule.getTrendAnalytics();
+  assert.equal(trends.cycles.length >= 1, true);
+
+  const backup = storeModule.backupDatabase(path.join(tempDir, "backups"));
+  assert.equal(fs.existsSync(backup.targetPath), true);
+
+  delete process.env.GRADE_EVAL_DB_PATH;
+  delete process.env.GRADE_EVAL_SEED_PATH;
+});

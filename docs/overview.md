@@ -7,6 +7,7 @@
 - [产品需求说明](./requirements.md)
 - [系统设计说明](./architecture.md)
 - [数据库表结构设计](./database-design.md)
+- [运维与企业化能力](./operations.md)
 - [后续任务路线图](./roadmap.md)
 - [接口说明](./api.md)
 - [使用与运行说明](../README.md)

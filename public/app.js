@@ -4,6 +4,10 @@ const state = {
   activeTab: "dashboard",
   selectedCycleId: null,
   scoreContext: null,
+  workflowItems: [],
+  auditItems: [],
+  trendData: null,
+  templateItems: [],
   message: "",
   error: ""
 };
@@ -17,6 +21,23 @@ function setMessage(message = "", error = "") {
 
 function scoreRateText(rate) {
   return `${Math.round((rate ?? 0) * 100)}%`;
+}
+
+function currentReviewType() {
+  if (state.user?.role === "employee") {
+    return "self";
+  }
+  if (state.user?.role === "supervisor") {
+    return "supervisor";
+  }
+  return "peer";
+}
+
+function visiblePeople() {
+  if (state.user?.role === "employee" && state.user.person_id) {
+    return state.app.people.filter((person) => person.id === state.user.person_id);
+  }
+  return state.app.people;
 }
 
 async function request(url, options = {}) {
@@ -79,7 +100,15 @@ function render() {
         </div>
         <div class="toolbar">
           <div class="tabs">
-            ${["dashboard", state.user.role === "admin" ? "admin" : null, "review", "analytics", "score"]
+            ${[
+              "dashboard",
+              state.user.role === "admin" ? "admin" : null,
+              "review",
+              "workflow",
+              "analytics",
+              ["admin", "auditor"].includes(state.user.role) ? "audit" : null,
+              "score"
+            ]
               .filter(Boolean)
               .map(
                 (tab) => `
@@ -87,7 +116,9 @@ function render() {
                   ${tab === "dashboard" ? "总览" : ""}
                   ${tab === "admin" ? "管理员配置" : ""}
                   ${tab === "review" ? "评分任务" : ""}
+                  ${tab === "workflow" ? "流程工作台" : ""}
                   ${tab === "analytics" ? "统计分析" : ""}
+                  ${tab === "audit" ? "审计日志" : ""}
                   ${tab === "score" ? "评分详情" : ""}
                 </button>`
               )
@@ -192,8 +223,16 @@ function renderMainTab(selectedCycle) {
     return renderReviewList(selectedCycle);
   }
 
+  if (state.activeTab === "workflow") {
+    return renderWorkflow(selectedCycle);
+  }
+
   if (state.activeTab === "analytics") {
     return renderAnalytics(selectedCycle);
+  }
+
+  if (state.activeTab === "audit") {
+    return renderAudit();
   }
 
   return "";
@@ -297,6 +336,33 @@ function renderFrameworkAdmin(selectedCycle) {
       </div>
       <form id="framework-form" class="grid" data-disabled="${selectedCycle.status !== "draft"}">
         <label>体系名称<input name="frameworkName" value="${framework.name}" ${selectedCycle.status !== "draft" ? "disabled" : ""} /></label>
+        <div class="dimension-card">
+          <div class="panel-title">
+            <h3>模板与备份</h3>
+            <div class="inline-actions">
+              <button class="button-secondary" type="button" data-action="load-templates">加载模板</button>
+              <button class="button-secondary" type="button" data-action="backup-db">备份数据库</button>
+            </div>
+          </div>
+          <div class="inline-actions">
+            <select id="template-select">
+              <option value="">选择等级规则模板</option>
+              ${state.templateItems
+                .map((item) => `<option value="${item.id}">${item.name}</option>`)
+                .join("")}
+            </select>
+            ${
+              selectedCycle.status === "draft"
+                ? `<button class="button-primary" type="button" data-action="apply-template">应用模板</button>`
+                : ""
+            }
+          </div>
+          ${
+            state.templateItems.length
+              ? `<div class="muted">${state.templateItems.map((item) => `${item.name}: ${item.description}`).join(" | ")}</div>`
+              : `<div class="muted">可加载“仅分数阈值 / 平衡模板 / 严格关键项”规则模板。</div>`
+          }
+        </div>
         <div class="dimension-card">
           <div class="panel-title">
             <h3>等级规则</h3>
@@ -509,7 +575,7 @@ function renderReviewList(selectedCycle) {
         <span class="badge">${selectedCycle.name}</span>
       </div>
       <div class="list">
-        ${state.app.people
+        ${visiblePeople()
           .map((person) => {
             const evaluation = evaluations.find((item) => item.personId === person.id);
             return `
@@ -530,6 +596,57 @@ function renderReviewList(selectedCycle) {
   `;
 }
 
+function renderWorkflow(selectedCycle) {
+  if (!selectedCycle) {
+    return `<section class="panel"><div class="empty">暂无批次</div></section>`;
+  }
+
+  return `
+    <section class="panel">
+      <div class="panel-title">
+        <h2>流程工作台</h2>
+        <div class="inline-actions">
+          <select id="workflow-person-select">
+            ${visiblePeople()
+              .map((person) => `<option value="${person.id}">${person.name} (${person.employeeNo})</option>`)
+              .join("")}
+          </select>
+          <button class="button-secondary" data-action="load-workflow">加载流程</button>
+        </div>
+      </div>
+      ${
+        state.workflowItems.length
+          ? `<table class="table">
+              <thead><tr><th>评审类型</th><th>评审人</th><th>状态</th><th>等级</th><th>总得分率</th><th>操作</th></tr></thead>
+              <tbody>
+                ${state.workflowItems
+                  .map(
+                    (item) => `
+                      <tr>
+                        <td>${item.reviewType}</td>
+                        <td>${item.reviewer?.name || "-"}</td>
+                        <td>${item.status}</td>
+                        <td>${item.result.levelName}</td>
+                        <td>${scoreRateText(item.result.scoreRate)}</td>
+                        <td>
+                          ${
+                            ["admin", "supervisor"].includes(state.user.role) && item.status === "submitted"
+                              ? `<button class="button-secondary" data-action="approve-review" data-id="${item.id}">通过</button>
+                                 <button class="button-danger" data-action="reject-review" data-id="${item.id}">驳回</button>`
+                              : "-"
+                          }
+                        </td>
+                      </tr>`
+                  )
+                  .join("")}
+              </tbody>
+            </table>`
+          : `<div class="empty">选择人员后可查看自评、评委评分和主管复核流程。</div>`
+      }
+    </section>
+  `;
+}
+
 function renderAnalytics(selectedCycle) {
   if (!selectedCycle) {
     return `<section class="panel"><div class="empty">暂无批次</div></section>`;
@@ -546,6 +663,44 @@ function renderAnalytics(selectedCycle) {
         </div>
       </div>
       <div id="analytics-content" class="empty">点击“刷新统计”加载当前批次分析结果。</div>
+      <div class="panel" style="margin-top: 18px;">
+        <div class="panel-title">
+          <h3>多批次趋势</h3>
+          <button class="button-secondary" data-action="load-trends">刷新趋势</button>
+        </div>
+        <div id="trend-content" class="empty">点击“刷新趋势”查看各批次平均得分率与等级分布变化。</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderAudit() {
+  return `
+    <section class="panel">
+      <div class="panel-title">
+        <h2>审计日志</h2>
+        <button class="button-secondary" data-action="load-audit">刷新日志</button>
+      </div>
+      ${
+        state.auditItems.length
+          ? `<table class="table">
+              <thead><tr><th>时间</th><th>动作</th><th>对象</th><th>实体ID</th></tr></thead>
+              <tbody>
+                ${state.auditItems
+                  .map(
+                    (item) => `
+                      <tr>
+                        <td>${new Date(item.createdAt).toLocaleString()}</td>
+                        <td>${item.action}</td>
+                        <td>${item.entityType}</td>
+                        <td>${item.entityId}</td>
+                      </tr>`
+                  )
+                  .join("")}
+              </tbody>
+            </table>`
+          : `<div class="empty">点击“刷新日志”加载操作审计记录。</div>`
+      }
     </section>
   `;
 }
@@ -691,8 +846,20 @@ function bindEvents() {
     button.addEventListener("click", () => handleSetScore(button.dataset.itemId, Number(button.dataset.score)))
   );
   document.querySelector('[data-action="load-analytics"]')?.addEventListener("click", handleLoadAnalytics);
+  document.querySelector('[data-action="load-trends"]')?.addEventListener("click", handleLoadTrends);
+  document.querySelector('[data-action="load-workflow"]')?.addEventListener("click", handleLoadWorkflow);
+  document.querySelector('[data-action="load-audit"]')?.addEventListener("click", handleLoadAudit);
+  document.querySelector('[data-action="load-templates"]')?.addEventListener("click", handleLoadTemplates);
+  document.querySelector('[data-action="apply-template"]')?.addEventListener("click", handleApplyTemplate);
+  document.querySelector('[data-action="backup-db"]')?.addEventListener("click", handleBackupDatabase);
   document.querySelectorAll('[data-action="export-results"]').forEach((button) =>
     button.addEventListener("click", () => handleExportResults(button.dataset.format))
+  );
+  document.querySelectorAll('[data-action="approve-review"]').forEach((button) =>
+    button.addEventListener("click", () => handleChangeReviewStatus(button.dataset.id, "approved"))
+  );
+  document.querySelectorAll('[data-action="reject-review"]').forEach((button) =>
+    button.addEventListener("click", () => handleChangeReviewStatus(button.dataset.id, "rejected"))
   );
 
   bindFrameworkEditorEvents();
@@ -961,8 +1128,10 @@ async function handleImportFramework(event) {
 
 async function handleOpenScore(personId) {
   try {
-    const payload = await request(`/api/evaluations/${state.selectedCycleId}/people/${personId}/form`);
-    state.scoreContext = payload;
+    const payload = await request(
+      `/api/reviews/${state.selectedCycleId}/people/${personId}/form?reviewType=${currentReviewType()}`
+    );
+    state.scoreContext = { ...payload, evaluation: payload.submission };
     state.activeTab = "score";
     setMessage();
     render();
@@ -977,13 +1146,13 @@ async function handleSetScore(itemId, score) {
     const scores = collectCurrentScores();
     scores[itemId] = score;
     const payload = await request(
-      `/api/evaluations/${state.selectedCycleId}/people/${state.scoreContext.person.id}/scores`,
+      `/api/reviews/${state.selectedCycleId}/people/${state.scoreContext.person.id}/scores`,
       {
         method: "PUT",
-        body: JSON.stringify({ scores })
+        body: JSON.stringify({ scores, reviewType: currentReviewType() })
       }
     );
-    state.scoreContext.evaluation = payload;
+    state.scoreContext.evaluation = payload.submission;
     await refreshEvaluationSummary();
   } catch (error) {
     setMessage("", error.message);
@@ -1011,13 +1180,14 @@ async function refreshEvaluationSummary() {
 async function handleSubmitScore() {
   try {
     const payload = await request(
-      `/api/evaluations/${state.selectedCycleId}/people/${state.scoreContext.person.id}/submit`,
+      `/api/reviews/${state.selectedCycleId}/people/${state.scoreContext.person.id}/submit`,
       {
-        method: "POST"
+        method: "POST",
+        body: JSON.stringify({ reviewType: currentReviewType() })
       }
     );
-    state.scoreContext.evaluation = payload;
-    await refreshApp("评分已提交。");
+    state.scoreContext.evaluation = payload.submission;
+    await refreshApp("评审已提交。");
     state.activeTab = "score";
     render();
   } catch (error) {
@@ -1128,6 +1298,112 @@ async function handleLoadAnalytics() {
 async function handleExportResults(format) {
   try {
     window.open(`/api/results/${state.selectedCycleId}/export?format=${format}`, "_blank");
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
+async function handleLoadTrends() {
+  try {
+    const payload = await request("/api/results/trends");
+    state.trendData = payload;
+    document.querySelector("#trend-content").outerHTML = `
+      <div id="trend-content">
+        <table class="table">
+          <thead><tr><th>批次</th><th>平均得分率</th><th>等级分布</th></tr></thead>
+          <tbody>
+            ${payload.cycles
+              .map(
+                (cycle) => `
+                  <tr>
+                    <td>${cycle.cycleName}</td>
+                    <td>${scoreRateText(cycle.averageScoreRate)}</td>
+                    <td>${cycle.levelDistribution.map((item) => `${item.levelName}:${item.count}`).join(" / ") || "-"}</td>
+                  </tr>`
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
+async function handleLoadAudit() {
+  try {
+    const payload = await request("/api/audit-logs?page=1&pageSize=50");
+    state.auditItems = payload.items;
+    render();
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
+async function handleLoadWorkflow() {
+  try {
+    const personId = document.querySelector("#workflow-person-select")?.value;
+    const payload = await request(`/api/reviews/${state.selectedCycleId}/people/${personId}`);
+    state.workflowItems = payload.items;
+    render();
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
+async function handleChangeReviewStatus(reviewId, status) {
+  try {
+    await request(`/api/reviews/${reviewId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status })
+    });
+    await handleLoadWorkflow();
+    setMessage(status === "approved" ? "评审已通过。" : "评审已驳回。");
+    render();
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
+async function handleLoadTemplates() {
+  try {
+    const payload = await request("/api/framework-templates");
+    state.templateItems = payload.items;
+    render();
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
+async function handleApplyTemplate() {
+  try {
+    const templateId = document.querySelector("#template-select")?.value;
+    if (!templateId) {
+      throw new Error("请先选择模板");
+    }
+    await request(`/api/cycles/${state.selectedCycleId}/framework/apply-template`, {
+      method: "POST",
+      body: JSON.stringify({ templateId })
+    });
+    await refreshApp("模板已应用到当前草稿批次。");
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
+async function handleBackupDatabase() {
+  try {
+    const payload = await request("/api/admin/backup", { method: "POST" });
+    setMessage(`数据库备份已生成：${payload.filename}`);
+    render();
   } catch (error) {
     setMessage("", error.message);
     render();
