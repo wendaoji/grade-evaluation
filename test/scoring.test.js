@@ -73,4 +73,6 @@ test("summarizeAnalytics aggregates level distribution and dimensions", () => {
   assert.equal(analytics.levelDistribution[0].levelName, "L3");
   assert.equal(analytics.dimensionAverages[0].averageScoreRate, 1);
   assert.equal(analytics.personalResults[0].personName, "张三");
+  assert.equal(analytics.departmentDistribution[0].department, "研发");
+  assert.equal(analytics.positionDistribution[0].position, "工程师");
 });

@@ -7,6 +7,7 @@ import {
   authenticate,
   createCycle,
   createPerson,
+  exportCycleResults,
   getCyclesList,
   getCycleAnalytics,
   getCyclePersonalResults,
@@ -14,6 +15,8 @@ import {
   getPeopleList,
   getPersonResult,
   getPublicAppState,
+  importFrameworkToCycle,
+  importPeopleBatch,
   saveEvaluationScores,
   submitEvaluation,
   updateCycleStatus,
@@ -30,6 +33,14 @@ function sendJson(response, statusCode, payload) {
     "Content-Type": "application/json; charset=utf-8"
   });
   response.end(JSON.stringify(payload));
+}
+
+function sendContent(response, statusCode, body, contentType, filename) {
+  response.writeHead(statusCode, {
+    "Content-Type": contentType,
+    ...(filename ? { "Content-Disposition": `attachment; filename=\"${filename}\"` } : {})
+  });
+  response.end(body);
 }
 
 function sendText(response, statusCode, payload, contentType = "text/plain; charset=utf-8") {
@@ -192,12 +203,31 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    const frameworkImportMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)\/framework\/import$/);
+    if (method === "POST" && frameworkImportMatch) {
+      if (!requireAdmin(request, response)) {
+        return;
+      }
+      const body = await readBody(request);
+      sendJson(response, 200, importFrameworkToCycle(frameworkImportMatch[1], body));
+      return;
+    }
+
     if (method === "POST" && url.pathname === "/api/people") {
       if (!requireAdmin(request, response)) {
         return;
       }
       const body = await readBody(request);
       sendJson(response, 201, createPerson(body));
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/api/import/people") {
+      if (!requireAdmin(request, response)) {
+        return;
+      }
+      const body = await readBody(request);
+      sendJson(response, 200, importPeopleBatch(body));
       return;
     }
 
@@ -270,6 +300,16 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       sendJson(response, 200, getCycleAnalytics(analyticsMatch[1]));
+      return;
+    }
+
+    const exportMatch = url.pathname.match(/^\/api\/results\/([^/]+)\/export$/);
+    if (method === "GET" && exportMatch) {
+      if (!requireUser(request, response)) {
+        return;
+      }
+      const exported = exportCycleResults(exportMatch[1], url.searchParams.get("format") || "csv");
+      sendContent(response, 200, exported.body, exported.contentType, exported.filename);
       return;
     }
 

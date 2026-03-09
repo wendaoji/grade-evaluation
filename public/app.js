@@ -465,6 +465,32 @@ function renderPeopleAdmin() {
             .join("")}
         </tbody>
       </table>
+      <div class="grid two-col" style="margin-top: 20px;">
+        <form id="people-import-form" class="dimension-card">
+          <div class="panel-title"><h3>批量导入人员</h3></div>
+          <label>
+            导入模式
+            <select name="mode">
+              <option value="merge">合并更新</option>
+              <option value="replace">替换现有人员</option>
+            </select>
+          </label>
+          <label>
+            CSV 内容
+            <textarea name="content" placeholder="employeeNo,name,department,position&#10;E003,王五,AI创新部,技术专家"></textarea>
+          </label>
+          <button class="button-primary" type="submit">导入人员</button>
+        </form>
+        <form id="framework-import-form" class="dimension-card">
+          <div class="panel-title"><h3>批量导入评价体系</h3></div>
+          <label>
+            JSON 内容
+            <textarea name="content" placeholder='{"name":"导入体系","levels":[],"dimensions":[]}'></textarea>
+          </label>
+          <button class="button-primary" type="submit">导入到当前草稿批次</button>
+          <div class="muted">仅当前批次为草稿时允许导入，导入后会替换该批次现有体系与评分记录。</div>
+        </form>
+      </div>
     </section>
   `;
 }
@@ -513,7 +539,11 @@ function renderAnalytics(selectedCycle) {
     <section class="panel">
       <div class="panel-title">
         <h2>统计分析</h2>
-        <button class="button-secondary" data-action="load-analytics">刷新统计</button>
+        <div class="inline-actions">
+          <button class="button-secondary" data-action="export-results" data-format="csv">导出 CSV</button>
+          <button class="button-secondary" data-action="export-results" data-format="json">导出 JSON</button>
+          <button class="button-secondary" data-action="load-analytics">刷新统计</button>
+        </div>
       </div>
       <div id="analytics-content" class="empty">点击“刷新统计”加载当前批次分析结果。</div>
     </section>
@@ -639,6 +669,8 @@ function bindEvents() {
 
   document.querySelector("#create-cycle-form")?.addEventListener("submit", handleCreateCycle);
   document.querySelector("#person-form")?.addEventListener("submit", handleCreatePerson);
+  document.querySelector("#people-import-form")?.addEventListener("submit", handleImportPeople);
+  document.querySelector("#framework-import-form")?.addEventListener("submit", handleImportFramework);
   document.querySelector("#framework-form")?.addEventListener("submit", handleSaveFramework);
 
   document.querySelectorAll('[data-action="activate-cycle"]').forEach((button) =>
@@ -659,6 +691,9 @@ function bindEvents() {
     button.addEventListener("click", () => handleSetScore(button.dataset.itemId, Number(button.dataset.score)))
   );
   document.querySelector('[data-action="load-analytics"]')?.addEventListener("click", handleLoadAnalytics);
+  document.querySelectorAll('[data-action="export-results"]').forEach((button) =>
+    button.addEventListener("click", () => handleExportResults(button.dataset.format))
+  );
 
   bindFrameworkEditorEvents();
 }
@@ -889,6 +924,41 @@ async function handleCreatePerson(event) {
   }
 }
 
+async function handleImportPeople(event) {
+  event.preventDefault();
+  try {
+    const formData = new FormData(event.currentTarget);
+    const result = await request("/api/import/people", {
+      method: "POST",
+      body: JSON.stringify({
+        mode: formData.get("mode"),
+        content: formData.get("content")
+      })
+    });
+    await refreshApp(`人员导入完成：共 ${result.total} 行，新增 ${result.created}，更新 ${result.updated}。`);
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
+async function handleImportFramework(event) {
+  event.preventDefault();
+  try {
+    const formData = new FormData(event.currentTarget);
+    await request(`/api/cycles/${state.selectedCycleId}/framework/import`, {
+      method: "POST",
+      body: JSON.stringify({
+        content: formData.get("content")
+      })
+    });
+    await refreshApp("评价体系已导入到当前草稿批次。");
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
 async function handleOpenScore(personId) {
   try {
     const payload = await request(`/api/evaluations/${state.selectedCycleId}/people/${personId}/form`);
@@ -991,6 +1061,42 @@ async function handleLoadAnalytics() {
           </table>
         </section>
         <section class="panel">
+          <div class="panel-title"><h3>部门分布</h3></div>
+          <table class="table">
+            <thead><tr><th>部门</th><th>人数</th><th>平均得分率</th></tr></thead>
+            <tbody>
+              ${payload.departmentDistribution
+                .map(
+                  (item) => `
+                    <tr>
+                      <td>${item.department}</td>
+                      <td>${item.count}</td>
+                      <td>${scoreRateText(item.averageScoreRate)}</td>
+                    </tr>`
+                )
+                .join("") || `<tr><td colspan="3">暂无数据</td></tr>`}
+            </tbody>
+          </table>
+        </section>
+        <section class="panel">
+          <div class="panel-title"><h3>岗位分布</h3></div>
+          <table class="table">
+            <thead><tr><th>岗位</th><th>人数</th><th>平均得分率</th></tr></thead>
+            <tbody>
+              ${payload.positionDistribution
+                .map(
+                  (item) => `
+                    <tr>
+                      <td>${item.position}</td>
+                      <td>${item.count}</td>
+                      <td>${scoreRateText(item.averageScoreRate)}</td>
+                    </tr>`
+                )
+                .join("") || `<tr><td colspan="3">暂无数据</td></tr>`}
+            </tbody>
+          </table>
+        </section>
+        <section class="panel">
           <div class="panel-title"><h3>个人结果</h3></div>
           <table class="table">
             <thead><tr><th>姓名</th><th>工号</th><th>等级</th><th>总得分率</th><th>关键项</th><th>状态</th></tr></thead>
@@ -1013,6 +1119,15 @@ async function handleLoadAnalytics() {
         </section>
       </div>
     `;
+  } catch (error) {
+    setMessage("", error.message);
+    render();
+  }
+}
+
+async function handleExportResults(format) {
+  try {
+    window.open(`/api/results/${state.selectedCycleId}/export?format=${format}`, "_blank");
   } catch (error) {
     setMessage("", error.message);
     render();

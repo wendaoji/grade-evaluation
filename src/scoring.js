@@ -151,6 +151,8 @@ export function buildEvaluationForm(framework, scores = {}) {
 export function summarizeAnalytics(cycle, people, evaluations) {
   const levelBuckets = new Map();
   const dimensionBuckets = new Map();
+  const departmentBuckets = new Map();
+  const positionBuckets = new Map();
   const personalResults = [];
 
   for (const person of people) {
@@ -168,6 +170,24 @@ export function summarizeAnalytics(cycle, people, evaluations) {
       status: evaluation.status,
       ...evaluation.result
     });
+
+    const departmentBucket = departmentBuckets.get(person.department || "未设置部门") ?? {
+      name: person.department || "未设置部门",
+      count: 0,
+      totalScoreRate: 0
+    };
+    departmentBucket.count += 1;
+    departmentBucket.totalScoreRate += evaluation.result.scoreRate;
+    departmentBuckets.set(departmentBucket.name, departmentBucket);
+
+    const positionBucket = positionBuckets.get(person.position || "未设置岗位") ?? {
+      name: person.position || "未设置岗位",
+      count: 0,
+      totalScoreRate: 0
+    };
+    positionBucket.count += 1;
+    positionBucket.totalScoreRate += evaluation.result.scoreRate;
+    positionBuckets.set(positionBucket.name, positionBucket);
 
     const currentLevel = levelBuckets.get(evaluation.result.levelName) ?? {
       levelName: evaluation.result.levelName,
@@ -203,6 +223,20 @@ export function summarizeAnalytics(cycle, people, evaluations) {
       dimensionName: item.dimensionName,
       averageScoreRate: round(item.totalRate / item.count)
     })),
+    departmentDistribution: [...departmentBuckets.values()]
+      .map((item) => ({
+        department: item.name,
+        count: item.count,
+        averageScoreRate: round(item.totalScoreRate / item.count)
+      }))
+      .sort((left, right) => right.count - left.count),
+    positionDistribution: [...positionBuckets.values()]
+      .map((item) => ({
+        position: item.name,
+        count: item.count,
+        averageScoreRate: round(item.totalScoreRate / item.count)
+      }))
+      .sort((left, right) => right.count - left.count),
     personalResults: personalResults.sort((left, right) => right.scoreRate - left.scoreRate)
   };
 }

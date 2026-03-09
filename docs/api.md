@@ -156,6 +156,22 @@
 
 更新人员信息。
 
+### `POST /api/import/people`
+
+批量导入人员，支持两种方式：
+
+- `rows`：直接传数组
+- `content`：传 CSV 文本
+
+示例：
+
+```json
+{
+  "mode": "merge",
+  "content": "employeeNo,name,department,position\nE003,王五,AI创新部,技术专家"
+}
+```
+
 ## 6. 评分接口
 
 ### `GET /api/evaluations/:cycleId/people/:personId/form`
@@ -221,6 +237,8 @@
 
 - `levelDistribution`
 - `dimensionAverages`
+- `departmentDistribution`
+- `positionDistribution`
 - `personalResults`
 
 ### `GET /api/results/:cycleId/personal-results`
@@ -234,3 +252,24 @@
 - `keyword`
 - `sortBy`：`scoreRate / personName / employeeNo / levelName / status`
 - `sortOrder`：`asc / desc`
+
+### `GET /api/results/:cycleId/export`
+
+导出某批次结果。
+
+查询参数：
+
+- `format=csv`
+- `format=json`
+
+### `POST /api/cycles/:cycleId/framework/import`
+
+将 JSON 格式的评价体系导入到指定草稿批次。
+
+示例：
+
+```json
+{
+  "content": "{\"name\":\"导入体系\",\"levels\":[],\"dimensions\":[]}"
+}
+```

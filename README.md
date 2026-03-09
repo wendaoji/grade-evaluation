@@ -9,6 +9,7 @@
 - 批次统计：等级分布、维度平均得分率、个人结果列表
 - SQLite 数据库存储，并支持首次从 JSON 种子数据自动导入
 - 密码哈希存储、统一错误处理、列表分页筛选排序
+- 批量导入人员与评价体系、结果导出、部门/岗位统计
 
 ## 启动
 
@@ -69,6 +70,12 @@ npm test
 - `GET /api/people`
 - `GET /api/cycles`
 - `GET /api/results/:cycleId/personal-results`
+
+新增业务增强接口能力：
+
+- `POST /api/import/people`
+- `POST /api/cycles/:cycleId/framework/import`
+- `GET /api/results/:cycleId/export`
 
 这些接口支持以下查询参数：
 

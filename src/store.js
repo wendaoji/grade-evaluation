@@ -152,6 +152,52 @@ function now() {
   return new Date().toISOString();
 }
 
+function parseDelimitedText(text) {
+  const rows = text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.split(",").map((cell) => cell.trim()));
+  if (rows.length < 2) {
+    throw new HttpError(400, "导入内容至少需要表头和一行数据");
+  }
+  const [header, ...body] = rows;
+  return body
+    .filter((row) => row.some(Boolean))
+    .map((row) => Object.fromEntries(header.map((key, index) => [key, row[index] ?? ""])));
+}
+
+function normalizePeopleImport(input) {
+  if (Array.isArray(input.rows)) {
+    return input.rows;
+  }
+  if (typeof input.content === "string" && input.content.trim()) {
+    return parseDelimitedText(input.content);
+  }
+  throw new HttpError(400, "人员导入内容不能为空");
+}
+
+function normalizeFrameworkImport(input) {
+  if (input.framework && typeof input.framework === "object") {
+    return input.framework;
+  }
+  if (typeof input.content === "string" && input.content.trim()) {
+    try {
+      return JSON.parse(input.content);
+    } catch {
+      throw new HttpError(400, "评价体系导入内容必须是合法 JSON");
+    }
+  }
+  throw new HttpError(400, "评价体系导入内容不能为空");
+}
+
+function toCsv(rows, headers) {
+  const escapeCell = (value) => {
+    const text = String(value ?? "");
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  return [headers.join(","), ...rows.map((row) => headers.map((key) => escapeCell(row[key])).join(","))].join("\n");
+}
+
 function compareValues(left, right, sortOrder) {
   if (left === right) {
     return 0;
@@ -973,4 +1019,113 @@ export function getCyclePersonalResults(cycleId, query) {
     levelName: (item) => item.levelName,
     status: (item) => item.status
   });
+}
+
+export function importPeopleBatch(input) {
+  const rows = normalizePeopleImport(input);
+  const mode = input.mode === "replace" ? "replace" : "merge";
+
+  return runInTransaction(() => {
+    if (mode === "replace") {
+      database.prepare("DELETE FROM evaluation_scores").run();
+      database.prepare("DELETE FROM evaluations").run();
+      database.prepare("DELETE FROM people").run();
+    }
+
+    const existingEmployeeNos = new Set(
+      database.prepare("SELECT employee_no FROM people").all().map((row) => row.employee_no)
+    );
+    const insertPerson = database.prepare(
+      `INSERT INTO people (id, employee_no, name, department, position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    const updatePersonByEmployeeNo = database.prepare(
+      `UPDATE people
+       SET name = ?, department = ?, position = ?, updated_at = ?
+       WHERE employee_no = ?`
+    );
+
+    let created = 0;
+    let updated = 0;
+    const timestamp = now();
+
+    for (const row of rows) {
+      const employeeNo = String(row.employeeNo ?? row.employee_no ?? "").trim();
+      const name = String(row.name ?? "").trim();
+      const department = String(row.department ?? "").trim();
+      const position = String(row.position ?? "").trim();
+
+      if (!employeeNo || !name) {
+        throw new HttpError(400, "人员导入要求每行包含 employeeNo 和 name");
+      }
+
+      if (existingEmployeeNos.has(employeeNo)) {
+        updatePersonByEmployeeNo.run(name, department, position, timestamp, employeeNo);
+        updated += 1;
+      } else {
+        insertPerson.run(randomUUID(), employeeNo, name, department, position, timestamp, timestamp);
+        existingEmployeeNos.add(employeeNo);
+        created += 1;
+      }
+    }
+
+    return { mode, total: rows.length, created, updated };
+  });
+}
+
+export function importFrameworkToCycle(cycleId, input) {
+  const cycleRow = getCycleRow(cycleId);
+  ensureCycleEditable(cycleRow);
+  const framework = sanitizeFramework(normalizeFrameworkImport(input), { regenerateIds: true });
+
+  runInTransaction(() => {
+    database
+      .prepare("DELETE FROM evaluation_scores WHERE evaluation_id IN (SELECT id FROM evaluations WHERE cycle_id = ?)")
+      .run(cycleId);
+    database.prepare("DELETE FROM evaluations WHERE cycle_id = ?").run(cycleId);
+    persistFramework(database, framework);
+    database
+      .prepare("UPDATE evaluation_cycles SET framework_id = ?, updated_at = ? WHERE id = ?")
+      .run(framework.id, now(), cycleId);
+    deleteFramework(database, cycleRow.framework_id);
+  });
+
+  return getCycle(cycleId).framework;
+}
+
+export function exportCycleResults(cycleId, format = "csv") {
+  const analytics = getCycleAnalytics(cycleId);
+  const rows = analytics.personalResults.map((item) => ({
+    employeeNo: item.employeeNo,
+    personName: item.personName,
+    department: item.department,
+    position: item.position,
+    levelName: item.levelName,
+    scoreRate: item.scoreRate,
+    keyScoreRate: item.keyScoreRate ?? "",
+    status: item.status
+  }));
+
+  if (format === "json") {
+    return {
+      contentType: "application/json; charset=utf-8",
+      filename: `${cycleId}-results.json`,
+      body: JSON.stringify(rows, null, 2)
+    };
+  }
+
+  return {
+    contentType: "text/csv; charset=utf-8",
+    filename: `${cycleId}-results.csv`,
+    body: toCsv(rows, [
+      "employeeNo",
+      "personName",
+      "department",
+      "position",
+      "levelName",
+      "scoreRate",
+      "keyScoreRate",
+      "status"
+    ])
+  };
 }
