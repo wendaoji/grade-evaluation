@@ -1,0 +1,235 @@
+{
+  "users": [
+    {
+      "id": "user-admin",
+      "username": "admin",
+      "password": "admin123",
+      "name": "系统管理员",
+      "role": "admin"
+    },
+    {
+      "id": "user-reviewer",
+      "username": "reviewer",
+      "password": "review123",
+      "name": "评价专家",
+      "role": "reviewer"
+    }
+  ],
+  "people": [
+    {
+      "id": "person-zhangsan",
+      "employeeNo": "E001",
+      "name": "张三",
+      "department": "智能制造中心",
+      "position": "高级工程师"
+    },
+    {
+      "id": "person-lisi",
+      "employeeNo": "E002",
+      "name": "李四",
+      "department": "工业互联网平台部",
+      "position": "工程师"
+    }
+  ],
+  "cycles": [
+    {
+      "id": "cycle-2026-h1",
+      "name": "2026 上半年任职资格评价",
+      "status": "active",
+      "createdAt": "2026-03-09T00:00:00.000Z",
+      "framework": {
+        "id": "framework-2026-h1",
+        "name": "默认评价体系",
+        "scoreOptions": [
+          0,
+          1,
+          3
+        ],
+        "weightOptions": [
+          1,
+          1.5,
+          2
+        ],
+        "levels": [
+          {
+            "id": "level-1",
+            "name": "L1",
+            "order": 1,
+            "minRate": 0,
+            "maxRate": 0.2
+          },
+          {
+            "id": "level-2",
+            "name": "L2",
+            "order": 2,
+            "minRate": 0.2,
+            "maxRate": 0.4
+          },
+          {
+            "id": "level-3",
+            "name": "L3",
+            "order": 3,
+            "minRate": 0.4,
+            "maxRate": 0.6
+          },
+          {
+            "id": "level-4",
+            "name": "L4",
+            "order": 4,
+            "minRate": 0.6,
+            "maxRate": 0.8,
+            "keyRule": {
+              "enabled": true,
+              "minKeyRate": 0.6,
+              "disallowZeroKeyScore": false
+            }
+          },
+          {
+            "id": "level-5",
+            "name": "L5",
+            "order": 5,
+            "minRate": 0.8,
+            "maxRate": 1,
+            "keyRule": {
+              "enabled": true,
+              "minKeyRate": 0.75,
+              "disallowZeroKeyScore": true
+            }
+          }
+        ],
+        "dimensions": [
+          {
+            "id": "dim-business",
+            "name": "业务能力",
+            "categories": [
+              {
+                "id": "cat-industry-internet",
+                "name": "工业互联网",
+                "items": [
+                  {
+                    "id": "item-platform-architecture",
+                    "title": "理解工业互联网平台总体架构",
+                    "description": "能够识别平台层、边缘层与应用层职责",
+                    "weight": 1.5,
+                    "isKeyItem": true
+                  },
+                  {
+                    "id": "item-scene-landing",
+                    "title": "推动典型业务场景落地",
+                    "description": "能将平台能力转化为工厂现场价值",
+                    "weight": 1
+                  }
+                ]
+              },
+              {
+                "id": "cat-smart-manufacture",
+                "name": "智能制造",
+                "items": [
+                  {
+                    "id": "item-mes-aps",
+                    "title": "理解 MES/APS 等制造系统协同",
+                    "description": "能够描述计划、执行与质量数据协同关系",
+                    "weight": 1
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "dim-it",
+            "name": "IT技术能力",
+            "categories": [
+              {
+                "id": "cat-frontend",
+                "name": "前端能力",
+                "items": [
+                  {
+                    "id": "item-frontend-component",
+                    "title": "能够构建复用型前端组件",
+                    "description": "具备组件抽象和页面拆分能力",
+                    "weight": 1
+                  }
+                ]
+              },
+              {
+                "id": "cat-backend",
+                "name": "后端能力",
+                "items": [
+                  {
+                    "id": "item-backend-api",
+                    "title": "能够设计稳定可维护的 API",
+                    "description": "涵盖接口设计、鉴权和异常处理",
+                    "weight": 1.5,
+                    "isKeyItem": true
+                  }
+                ]
+              },
+              {
+                "id": "cat-architecture",
+                "name": "系统架构能力",
+                "items": [
+                  {
+                    "id": "item-architecture-evolution",
+                    "title": "具备系统架构演进与治理能力",
+                    "description": "能够处理复杂系统模块拆分与性能瓶颈",
+                    "weight": 2,
+                    "isKeyItem": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "dim-ai",
+            "name": "AI应用能力",
+            "categories": [
+              {
+                "id": "cat-ai-application",
+                "name": "AI应用能力",
+                "items": [
+                  {
+                    "id": "item-ai-workflow",
+                    "title": "能够把 AI 工具用于研发或业务流程",
+                    "description": "会设计提示词、工作流或自动化辅助",
+                    "weight": 1.5
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "dim-general",
+            "name": "通用能力",
+            "categories": [
+              {
+                "id": "cat-communication",
+                "name": "沟通表达能力",
+                "items": [
+                  {
+                    "id": "item-communication",
+                    "title": "能够清晰表达问题与方案",
+                    "description": "跨团队沟通清晰，推动协作达成",
+                    "weight": 1
+                  }
+                ]
+              },
+              {
+                "id": "cat-learning",
+                "name": "学习能力",
+                "items": [
+                  {
+                    "id": "item-learning",
+                    "title": "能够持续学习并快速掌握新领域",
+                    "description": "面对新技术或新业务能够快速建立认知",
+                    "weight": 1
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "evaluations": []
+}
